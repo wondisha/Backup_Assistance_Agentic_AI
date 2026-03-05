@@ -1,0 +1,876 @@
+-- =====================================================
+-- SNOWFLAKE BACKUP ASSISTANT AGENT - Complete Setup
+-- Repository: github.com/wondisha
+-- =====================================================
+-- This script creates a Cortex Agent for managing Snowflake 
+-- database, schema, and table backups with full automation.
+
+-- =====================================================
+-- STEP 1: CREATE DATABASE AND SCHEMA
+-- =====================================================
+CREATE DATABASE IF NOT EXISTS BACKUP_AGENT_DB;
+CREATE SCHEMA IF NOT EXISTS BACKUP_AGENT_DB.BACKUP_TOOLS;
+
+USE DATABASE BACKUP_AGENT_DB;
+USE SCHEMA BACKUP_TOOLS;
+
+-- =====================================================
+-- STEP 2: STORED PROCEDURES FOR BACKUP OPERATIONS
+-- =====================================================
+
+-- Procedure: Create a backup set for a table
+CREATE OR REPLACE PROCEDURE BACKUP_AGENT_DB.BACKUP_TOOLS.CREATE_TABLE_BACKUP_SET(
+    BACKUP_SET_NAME VARCHAR,
+    DATABASE_NAME VARCHAR,
+    SCHEMA_NAME VARCHAR,
+    TABLE_NAME VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    EXECUTE IMMEDIATE 'CREATE BACKUP SET ' || BACKUP_SET_NAME || 
+        ' FOR TABLE ' || DATABASE_NAME || '.' || SCHEMA_NAME || '.' || TABLE_NAME;
+    RETURN 'Backup set ' || BACKUP_SET_NAME || ' created successfully for table ' || 
+        DATABASE_NAME || '.' || SCHEMA_NAME || '.' || TABLE_NAME;
+EXCEPTION
+    WHEN OTHER THEN
+        RETURN 'Error creating backup set: ' || SQLERRM;
+END;
+$$;
+
+-- Procedure: Create a backup set for a schema
+CREATE OR REPLACE PROCEDURE BACKUP_AGENT_DB.BACKUP_TOOLS.CREATE_SCHEMA_BACKUP_SET(
+    BACKUP_SET_NAME VARCHAR,
+    DATABASE_NAME VARCHAR,
+    SCHEMA_NAME VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    EXECUTE IMMEDIATE 'CREATE BACKUP SET ' || BACKUP_SET_NAME || 
+        ' FOR SCHEMA ' || DATABASE_NAME || '.' || SCHEMA_NAME;
+    RETURN 'Backup set ' || BACKUP_SET_NAME || ' created successfully for schema ' || 
+        DATABASE_NAME || '.' || SCHEMA_NAME;
+EXCEPTION
+    WHEN OTHER THEN
+        RETURN 'Error creating backup set: ' || SQLERRM;
+END;
+$$;
+
+-- Procedure: Create a backup set for a database
+CREATE OR REPLACE PROCEDURE BACKUP_AGENT_DB.BACKUP_TOOLS.CREATE_DATABASE_BACKUP_SET(
+    BACKUP_SET_NAME VARCHAR,
+    DATABASE_NAME VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    EXECUTE IMMEDIATE 'CREATE BACKUP SET ' || BACKUP_SET_NAME || 
+        ' FOR DATABASE ' || DATABASE_NAME;
+    RETURN 'Backup set ' || BACKUP_SET_NAME || ' created successfully for database ' || DATABASE_NAME;
+EXCEPTION
+    WHEN OTHER THEN
+        RETURN 'Error creating backup set: ' || SQLERRM;
+END;
+$$;
+
+-- Procedure: Create a backup set with a backup policy
+CREATE OR REPLACE PROCEDURE BACKUP_AGENT_DB.BACKUP_TOOLS.CREATE_BACKUP_SET_WITH_POLICY(
+    BACKUP_SET_NAME VARCHAR,
+    OBJECT_TYPE VARCHAR,
+    OBJECT_FULL_NAME VARCHAR,
+    POLICY_NAME VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    EXECUTE IMMEDIATE 'CREATE BACKUP SET ' || BACKUP_SET_NAME || 
+        ' FOR ' || OBJECT_TYPE || ' ' || OBJECT_FULL_NAME || 
+        ' WITH BACKUP POLICY ' || POLICY_NAME;
+    RETURN 'Backup set ' || BACKUP_SET_NAME || ' created with policy ' || POLICY_NAME;
+EXCEPTION
+    WHEN OTHER THEN
+        RETURN 'Error creating backup set with policy: ' || SQLERRM;
+END;
+$$;
+
+-- Procedure: Add a manual backup to a backup set
+CREATE OR REPLACE PROCEDURE BACKUP_AGENT_DB.BACKUP_TOOLS.ADD_BACKUP(
+    BACKUP_SET_NAME VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    EXECUTE IMMEDIATE 'ALTER BACKUP SET ' || BACKUP_SET_NAME || ' ADD BACKUP';
+    RETURN 'Backup added successfully to backup set ' || BACKUP_SET_NAME;
+EXCEPTION
+    WHEN OTHER THEN
+        RETURN 'Error adding backup: ' || SQLERRM;
+END;
+$$;
+
+-- Procedure: List backups in a backup set
+CREATE OR REPLACE PROCEDURE BACKUP_AGENT_DB.BACKUP_TOOLS.LIST_BACKUPS(
+    BACKUP_SET_NAME VARCHAR
+)
+RETURNS TABLE(CREATED_ON TIMESTAMP_LTZ, BACKUP_ID VARCHAR, EXPIRE_ON TIMESTAMP_LTZ)
+LANGUAGE SQL
+AS
+$$
+DECLARE
+    res RESULTSET;
+BEGIN
+    res := (EXECUTE IMMEDIATE 'SHOW BACKUPS IN BACKUP SET ' || BACKUP_SET_NAME);
+    RETURN TABLE(res);
+END;
+$$;
+
+-- Procedure: Create a backup policy
+CREATE OR REPLACE PROCEDURE BACKUP_AGENT_DB.BACKUP_TOOLS.CREATE_BACKUP_POLICY(
+    POLICY_NAME VARCHAR,
+    SCHEDULE_MINUTES INT,
+    EXPIRE_AFTER_DAYS INT
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    EXECUTE IMMEDIATE 'CREATE BACKUP POLICY ' || POLICY_NAME || 
+        ' SCHEDULE = ''' || SCHEDULE_MINUTES || ' MINUTE'' EXPIRE_AFTER_DAYS = ' || EXPIRE_AFTER_DAYS;
+    RETURN 'Backup policy ' || POLICY_NAME || ' created with schedule every ' || 
+        SCHEDULE_MINUTES || ' minutes and expiration after ' || EXPIRE_AFTER_DAYS || ' days';
+EXCEPTION
+    WHEN OTHER THEN
+        RETURN 'Error creating backup policy: ' || SQLERRM;
+END;
+$$;
+
+-- Procedure: Suspend backup policy on a backup set
+CREATE OR REPLACE PROCEDURE BACKUP_AGENT_DB.BACKUP_TOOLS.SUSPEND_BACKUP_POLICY(
+    BACKUP_SET_NAME VARCHAR,
+    SUSPEND_TYPE VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+DECLARE
+    CMD VARCHAR;
+BEGIN
+    CASE UPPER(SUSPEND_TYPE)
+        WHEN 'ALL' THEN
+            CMD := 'ALTER BACKUP SET ' || BACKUP_SET_NAME || ' SUSPEND BACKUP POLICY';
+        WHEN 'CREATION' THEN
+            CMD := 'ALTER BACKUP SET ' || BACKUP_SET_NAME || ' SUSPEND BACKUP CREATION POLICY';
+        WHEN 'EXPIRATION' THEN
+            CMD := 'ALTER BACKUP SET ' || BACKUP_SET_NAME || ' SUSPEND BACKUP EXPIRATION POLICY';
+        ELSE
+            RETURN 'Invalid suspend type. Use ALL, CREATION, or EXPIRATION';
+    END CASE;
+    EXECUTE IMMEDIATE CMD;
+    RETURN 'Backup policy ' || SUSPEND_TYPE || ' suspended on backup set ' || BACKUP_SET_NAME;
+EXCEPTION
+    WHEN OTHER THEN
+        RETURN 'Error suspending backup policy: ' || SQLERRM;
+END;
+$$;
+
+-- Procedure: Resume backup policy on a backup set
+CREATE OR REPLACE PROCEDURE BACKUP_AGENT_DB.BACKUP_TOOLS.RESUME_BACKUP_POLICY(
+    BACKUP_SET_NAME VARCHAR,
+    RESUME_TYPE VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+DECLARE
+    CMD VARCHAR;
+BEGIN
+    CASE UPPER(RESUME_TYPE)
+        WHEN 'ALL' THEN
+            CMD := 'ALTER BACKUP SET ' || BACKUP_SET_NAME || ' RESUME BACKUP POLICY';
+        WHEN 'CREATION' THEN
+            CMD := 'ALTER BACKUP SET ' || BACKUP_SET_NAME || ' RESUME BACKUP CREATION POLICY';
+        WHEN 'EXPIRATION' THEN
+            CMD := 'ALTER BACKUP SET ' || BACKUP_SET_NAME || ' RESUME BACKUP EXPIRATION POLICY';
+        ELSE
+            RETURN 'Invalid resume type. Use ALL, CREATION, or EXPIRATION';
+    END CASE;
+    EXECUTE IMMEDIATE CMD;
+    RETURN 'Backup policy ' || RESUME_TYPE || ' resumed on backup set ' || BACKUP_SET_NAME;
+EXCEPTION
+    WHEN OTHER THEN
+        RETURN 'Error resuming backup policy: ' || SQLERRM;
+END;
+$$;
+
+-- Procedure: Restore a table from backup
+CREATE OR REPLACE PROCEDURE BACKUP_AGENT_DB.BACKUP_TOOLS.RESTORE_TABLE(
+    NEW_TABLE_NAME VARCHAR,
+    BACKUP_SET_NAME VARCHAR,
+    BACKUP_ID VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    EXECUTE IMMEDIATE 'CREATE TABLE ' || NEW_TABLE_NAME || 
+        ' FROM BACKUP SET ' || BACKUP_SET_NAME || ' IDENTIFIER ''' || BACKUP_ID || '''';
+    RETURN 'Table restored as ' || NEW_TABLE_NAME || ' from backup ' || BACKUP_ID;
+EXCEPTION
+    WHEN OTHER THEN
+        RETURN 'Error restoring table: ' || SQLERRM;
+END;
+$$;
+
+-- Procedure: Restore a schema from backup
+CREATE OR REPLACE PROCEDURE BACKUP_AGENT_DB.BACKUP_TOOLS.RESTORE_SCHEMA(
+    NEW_SCHEMA_NAME VARCHAR,
+    BACKUP_SET_NAME VARCHAR,
+    BACKUP_ID VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    EXECUTE IMMEDIATE 'CREATE SCHEMA ' || NEW_SCHEMA_NAME || 
+        ' FROM BACKUP SET ' || BACKUP_SET_NAME || ' IDENTIFIER ''' || BACKUP_ID || '''';
+    RETURN 'Schema restored as ' || NEW_SCHEMA_NAME || ' from backup ' || BACKUP_ID;
+EXCEPTION
+    WHEN OTHER THEN
+        RETURN 'Error restoring schema: ' || SQLERRM;
+END;
+$$;
+
+-- Procedure: Restore a database from backup
+CREATE OR REPLACE PROCEDURE BACKUP_AGENT_DB.BACKUP_TOOLS.RESTORE_DATABASE(
+    NEW_DATABASE_NAME VARCHAR,
+    BACKUP_SET_NAME VARCHAR,
+    BACKUP_ID VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    EXECUTE IMMEDIATE 'CREATE DATABASE ' || NEW_DATABASE_NAME || 
+        ' FROM BACKUP SET ' || BACKUP_SET_NAME || ' IDENTIFIER ''' || BACKUP_ID || '''';
+    RETURN 'Database restored as ' || NEW_DATABASE_NAME || ' from backup ' || BACKUP_ID;
+EXCEPTION
+    WHEN OTHER THEN
+        RETURN 'Error restoring database: ' || SQLERRM;
+END;
+$$;
+
+-- Procedure: Delete a backup from a backup set (oldest only)
+CREATE OR REPLACE PROCEDURE BACKUP_AGENT_DB.BACKUP_TOOLS.DELETE_BACKUP(
+    BACKUP_SET_NAME VARCHAR,
+    BACKUP_ID VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    EXECUTE IMMEDIATE 'ALTER BACKUP SET ' || BACKUP_SET_NAME || 
+        ' DELETE BACKUP IDENTIFIER ''' || BACKUP_ID || '''';
+    RETURN 'Backup ' || BACKUP_ID || ' deleted from backup set ' || BACKUP_SET_NAME;
+EXCEPTION
+    WHEN OTHER THEN
+        RETURN 'Error deleting backup: ' || SQLERRM;
+END;
+$$;
+
+-- Procedure: Drop a backup set
+CREATE OR REPLACE PROCEDURE BACKUP_AGENT_DB.BACKUP_TOOLS.DROP_BACKUP_SET(
+    BACKUP_SET_NAME VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    EXECUTE IMMEDIATE 'DROP BACKUP SET ' || BACKUP_SET_NAME;
+    RETURN 'Backup set ' || BACKUP_SET_NAME || ' dropped successfully';
+EXCEPTION
+    WHEN OTHER THEN
+        RETURN 'Error dropping backup set: ' || SQLERRM;
+END;
+$$;
+
+-- Procedure: Add legal hold to a backup
+CREATE OR REPLACE PROCEDURE BACKUP_AGENT_DB.BACKUP_TOOLS.ADD_LEGAL_HOLD(
+    BACKUP_SET_NAME VARCHAR,
+    BACKUP_ID VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    EXECUTE IMMEDIATE 'ALTER BACKUP SET ' || BACKUP_SET_NAME || 
+        ' MODIFY BACKUP IDENTIFIER ''' || BACKUP_ID || ''' ADD LEGAL HOLD';
+    RETURN 'Legal hold added to backup ' || BACKUP_ID || ' in backup set ' || BACKUP_SET_NAME;
+EXCEPTION
+    WHEN OTHER THEN
+        RETURN 'Error adding legal hold: ' || SQLERRM;
+END;
+$$;
+
+-- Procedure: Remove legal hold from a backup
+CREATE OR REPLACE PROCEDURE BACKUP_AGENT_DB.BACKUP_TOOLS.REMOVE_LEGAL_HOLD(
+    BACKUP_SET_NAME VARCHAR,
+    BACKUP_ID VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    EXECUTE IMMEDIATE 'ALTER BACKUP SET ' || BACKUP_SET_NAME || 
+        ' MODIFY BACKUP IDENTIFIER ''' || BACKUP_ID || ''' REMOVE LEGAL HOLD';
+    RETURN 'Legal hold removed from backup ' || BACKUP_ID || ' in backup set ' || BACKUP_SET_NAME;
+EXCEPTION
+    WHEN OTHER THEN
+        RETURN 'Error removing legal hold: ' || SQLERRM;
+END;
+$$;
+
+-- Procedure: Show all backup sets
+CREATE OR REPLACE PROCEDURE BACKUP_AGENT_DB.BACKUP_TOOLS.LIST_BACKUP_SETS()
+RETURNS TABLE(NAME VARCHAR, OBJECT_KIND VARCHAR, DATABASE_NAME VARCHAR, SCHEMA_NAME VARCHAR, OBJECT_NAME VARCHAR)
+LANGUAGE SQL
+AS
+$$
+DECLARE
+    res RESULTSET;
+BEGIN
+    res := (EXECUTE IMMEDIATE 'SHOW BACKUP SETS');
+    RETURN TABLE(res);
+END;
+$$;
+
+-- Procedure: Apply backup policy to existing backup set
+CREATE OR REPLACE PROCEDURE BACKUP_AGENT_DB.BACKUP_TOOLS.APPLY_BACKUP_POLICY(
+    BACKUP_SET_NAME VARCHAR,
+    POLICY_NAME VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    EXECUTE IMMEDIATE 'ALTER BACKUP SET ' || BACKUP_SET_NAME || 
+        ' APPLY BACKUP POLICY ' || POLICY_NAME;
+    RETURN 'Backup policy ' || POLICY_NAME || ' applied to backup set ' || BACKUP_SET_NAME;
+EXCEPTION
+    WHEN OTHER THEN
+        RETURN 'Error applying backup policy: ' || SQLERRM;
+END;
+$$;
+
+-- =====================================================
+-- STEP 3: CREATE THE CORTEX AGENT
+-- =====================================================
+
+CREATE OR REPLACE AGENT BACKUP_AGENT_DB.BACKUP_TOOLS.BACKUP_ASSISTANT
+    COMMENT = 'Cortex Agent for managing Snowflake database, schema, and table backups'
+    FROM SPECIFICATION
+    $$
+    models:
+      orchestration: claude-4-sonnet
+
+    orchestration:
+      budget:
+        seconds: 60
+        tokens: 16000
+
+    instructions:
+      system: |
+        You are a Snowflake Backup Assistant that helps users manage database, schema, and table backups.
+        You can create backup sets, add backups, restore from backups, manage backup policies, and handle legal holds.
+        
+        Key concepts:
+        - Backup Set: A container that holds backups for a specific table, schema, or database
+        - Backup Policy: Defines automatic backup schedule and expiration
+        - Legal Hold: Prevents a backup from being deleted for compliance purposes
+        
+        Important rules:
+        - Only the oldest backup without legal hold can be deleted from a backup set
+        - Backups can only be restored to a new object name, not overwrite existing objects
+        - When restoring, the backup_id must be obtained from listing backups first
+        
+      orchestration: |
+        For backup operations:
+        - Use create_table_backup_set, create_schema_backup_set, or create_database_backup_set to create new backup sets
+        - Use add_backup to manually trigger a backup
+        - Use list_backups to see available backups and get backup_id for restore
+        - Use restore_table, restore_schema, or restore_database to restore from backup
+        - Use create_backup_policy and create_backup_set_with_policy for scheduled backups
+        - Use apply_backup_policy to attach a policy to an existing backup set
+        - Use suspend_backup_policy and resume_backup_policy to manage policy execution
+        - Use add_legal_hold and remove_legal_hold for compliance requirements
+        
+      response: |
+        Provide clear, concise responses about backup operations.
+        When listing backups, format the output as a table showing backup_id, created_on, and expire_on.
+        Always confirm the action taken and any important next steps.
+
+    tools:
+      - tool_spec:
+          type: "generic"
+          name: "create_table_backup_set"
+          description: "Creates a new backup set for a specific table."
+          input_schema:
+            type: "object"
+            properties:
+              backup_set_name:
+                type: "string"
+                description: "Name for the new backup set"
+              database_name:
+                type: "string"
+                description: "Database containing the table"
+              schema_name:
+                type: "string"
+                description: "Schema containing the table"
+              table_name:
+                type: "string"
+                description: "Name of the table to backup"
+            required: ["backup_set_name", "database_name", "schema_name", "table_name"]
+
+      - tool_spec:
+          type: "generic"
+          name: "create_schema_backup_set"
+          description: "Creates a new backup set for an entire schema."
+          input_schema:
+            type: "object"
+            properties:
+              backup_set_name:
+                type: "string"
+                description: "Name for the new backup set"
+              database_name:
+                type: "string"
+                description: "Database containing the schema"
+              schema_name:
+                type: "string"
+                description: "Name of the schema to backup"
+            required: ["backup_set_name", "database_name", "schema_name"]
+
+      - tool_spec:
+          type: "generic"
+          name: "create_database_backup_set"
+          description: "Creates a new backup set for an entire database."
+          input_schema:
+            type: "object"
+            properties:
+              backup_set_name:
+                type: "string"
+                description: "Name for the new backup set"
+              database_name:
+                type: "string"
+                description: "Name of the database to backup"
+            required: ["backup_set_name", "database_name"]
+
+      - tool_spec:
+          type: "generic"
+          name: "create_backup_policy"
+          description: "Creates a backup policy with schedule and expiration."
+          input_schema:
+            type: "object"
+            properties:
+              policy_name:
+                type: "string"
+                description: "Name for the backup policy"
+              schedule_minutes:
+                type: "integer"
+                description: "Backup frequency in minutes (60=hourly, 1440=daily, 10080=weekly)"
+              expire_after_days:
+                type: "integer"
+                description: "Days after which backups expire"
+            required: ["policy_name", "schedule_minutes", "expire_after_days"]
+
+      - tool_spec:
+          type: "generic"
+          name: "create_backup_set_with_policy"
+          description: "Creates a backup set with an associated backup policy."
+          input_schema:
+            type: "object"
+            properties:
+              backup_set_name:
+                type: "string"
+                description: "Name for the new backup set"
+              object_type:
+                type: "string"
+                description: "Type: TABLE, SCHEMA, or DATABASE"
+              object_full_name:
+                type: "string"
+                description: "Fully qualified object name"
+              policy_name:
+                type: "string"
+                description: "Name of the backup policy"
+            required: ["backup_set_name", "object_type", "object_full_name", "policy_name"]
+
+      - tool_spec:
+          type: "generic"
+          name: "apply_backup_policy"
+          description: "Applies a backup policy to an existing backup set."
+          input_schema:
+            type: "object"
+            properties:
+              backup_set_name:
+                type: "string"
+                description: "Name of the backup set"
+              policy_name:
+                type: "string"
+                description: "Fully qualified policy name to apply"
+            required: ["backup_set_name", "policy_name"]
+
+      - tool_spec:
+          type: "generic"
+          name: "add_backup"
+          description: "Manually triggers a backup."
+          input_schema:
+            type: "object"
+            properties:
+              backup_set_name:
+                type: "string"
+                description: "Name of the backup set"
+            required: ["backup_set_name"]
+
+      - tool_spec:
+          type: "generic"
+          name: "list_backups"
+          description: "Lists all backups in a backup set."
+          input_schema:
+            type: "object"
+            properties:
+              backup_set_name:
+                type: "string"
+                description: "Name of the backup set"
+            required: ["backup_set_name"]
+
+      - tool_spec:
+          type: "generic"
+          name: "list_backup_sets"
+          description: "Lists all backup sets in the account."
+          input_schema:
+            type: "object"
+            properties: {}
+
+      - tool_spec:
+          type: "generic"
+          name: "restore_table"
+          description: "Restores a table from a backup."
+          input_schema:
+            type: "object"
+            properties:
+              new_table_name:
+                type: "string"
+                description: "Fully qualified name for restored table"
+              backup_set_name:
+                type: "string"
+                description: "Name of the backup set"
+              backup_id:
+                type: "string"
+                description: "UUID of the backup"
+            required: ["new_table_name", "backup_set_name", "backup_id"]
+
+      - tool_spec:
+          type: "generic"
+          name: "restore_schema"
+          description: "Restores a schema from a backup."
+          input_schema:
+            type: "object"
+            properties:
+              new_schema_name:
+                type: "string"
+                description: "Fully qualified name for restored schema"
+              backup_set_name:
+                type: "string"
+                description: "Name of the backup set"
+              backup_id:
+                type: "string"
+                description: "UUID of the backup"
+            required: ["new_schema_name", "backup_set_name", "backup_id"]
+
+      - tool_spec:
+          type: "generic"
+          name: "restore_database"
+          description: "Restores a database from a backup."
+          input_schema:
+            type: "object"
+            properties:
+              new_database_name:
+                type: "string"
+                description: "Name for restored database"
+              backup_set_name:
+                type: "string"
+                description: "Name of the backup set"
+              backup_id:
+                type: "string"
+                description: "UUID of the backup"
+            required: ["new_database_name", "backup_set_name", "backup_id"]
+
+      - tool_spec:
+          type: "generic"
+          name: "suspend_backup_policy"
+          description: "Suspends a backup policy on a backup set."
+          input_schema:
+            type: "object"
+            properties:
+              backup_set_name:
+                type: "string"
+                description: "Name of the backup set"
+              suspend_type:
+                type: "string"
+                description: "ALL, CREATION, or EXPIRATION"
+            required: ["backup_set_name", "suspend_type"]
+
+      - tool_spec:
+          type: "generic"
+          name: "resume_backup_policy"
+          description: "Resumes a suspended backup policy."
+          input_schema:
+            type: "object"
+            properties:
+              backup_set_name:
+                type: "string"
+                description: "Name of the backup set"
+              resume_type:
+                type: "string"
+                description: "ALL, CREATION, or EXPIRATION"
+            required: ["backup_set_name", "resume_type"]
+
+      - tool_spec:
+          type: "generic"
+          name: "delete_backup"
+          description: "Deletes the oldest backup without legal hold."
+          input_schema:
+            type: "object"
+            properties:
+              backup_set_name:
+                type: "string"
+                description: "Name of the backup set"
+              backup_id:
+                type: "string"
+                description: "UUID of the backup to delete"
+            required: ["backup_set_name", "backup_id"]
+
+      - tool_spec:
+          type: "generic"
+          name: "drop_backup_set"
+          description: "Drops an entire backup set."
+          input_schema:
+            type: "object"
+            properties:
+              backup_set_name:
+                type: "string"
+                description: "Name of the backup set to drop"
+            required: ["backup_set_name"]
+
+      - tool_spec:
+          type: "generic"
+          name: "add_legal_hold"
+          description: "Adds a legal hold to a backup for compliance."
+          input_schema:
+            type: "object"
+            properties:
+              backup_set_name:
+                type: "string"
+                description: "Name of the backup set"
+              backup_id:
+                type: "string"
+                description: "UUID of the backup"
+            required: ["backup_set_name", "backup_id"]
+
+      - tool_spec:
+          type: "generic"
+          name: "remove_legal_hold"
+          description: "Removes a legal hold from a backup."
+          input_schema:
+            type: "object"
+            properties:
+              backup_set_name:
+                type: "string"
+                description: "Name of the backup set"
+              backup_id:
+                type: "string"
+                description: "UUID of the backup"
+            required: ["backup_set_name", "backup_id"]
+
+    tool_resources:
+      create_table_backup_set:
+        type: "procedure"
+        identifier: "BACKUP_AGENT_DB.BACKUP_TOOLS.CREATE_TABLE_BACKUP_SET"
+        execution_environment:
+          type: "warehouse"
+          warehouse: "COMPUTE_WH"
+
+      create_schema_backup_set:
+        type: "procedure"
+        identifier: "BACKUP_AGENT_DB.BACKUP_TOOLS.CREATE_SCHEMA_BACKUP_SET"
+        execution_environment:
+          type: "warehouse"
+          warehouse: "COMPUTE_WH"
+
+      create_database_backup_set:
+        type: "procedure"
+        identifier: "BACKUP_AGENT_DB.BACKUP_TOOLS.CREATE_DATABASE_BACKUP_SET"
+        execution_environment:
+          type: "warehouse"
+          warehouse: "COMPUTE_WH"
+
+      create_backup_policy:
+        type: "procedure"
+        identifier: "BACKUP_AGENT_DB.BACKUP_TOOLS.CREATE_BACKUP_POLICY"
+        execution_environment:
+          type: "warehouse"
+          warehouse: "COMPUTE_WH"
+
+      create_backup_set_with_policy:
+        type: "procedure"
+        identifier: "BACKUP_AGENT_DB.BACKUP_TOOLS.CREATE_BACKUP_SET_WITH_POLICY"
+        execution_environment:
+          type: "warehouse"
+          warehouse: "COMPUTE_WH"
+
+      apply_backup_policy:
+        type: "procedure"
+        identifier: "BACKUP_AGENT_DB.BACKUP_TOOLS.APPLY_BACKUP_POLICY"
+        execution_environment:
+          type: "warehouse"
+          warehouse: "COMPUTE_WH"
+
+      add_backup:
+        type: "procedure"
+        identifier: "BACKUP_AGENT_DB.BACKUP_TOOLS.ADD_BACKUP"
+        execution_environment:
+          type: "warehouse"
+          warehouse: "COMPUTE_WH"
+
+      list_backups:
+        type: "procedure"
+        identifier: "BACKUP_AGENT_DB.BACKUP_TOOLS.LIST_BACKUPS"
+        execution_environment:
+          type: "warehouse"
+          warehouse: "COMPUTE_WH"
+
+      list_backup_sets:
+        type: "procedure"
+        identifier: "BACKUP_AGENT_DB.BACKUP_TOOLS.LIST_BACKUP_SETS"
+        execution_environment:
+          type: "warehouse"
+          warehouse: "COMPUTE_WH"
+
+      restore_table:
+        type: "procedure"
+        identifier: "BACKUP_AGENT_DB.BACKUP_TOOLS.RESTORE_TABLE"
+        execution_environment:
+          type: "warehouse"
+          warehouse: "COMPUTE_WH"
+
+      restore_schema:
+        type: "procedure"
+        identifier: "BACKUP_AGENT_DB.BACKUP_TOOLS.RESTORE_SCHEMA"
+        execution_environment:
+          type: "warehouse"
+          warehouse: "COMPUTE_WH"
+
+      restore_database:
+        type: "procedure"
+        identifier: "BACKUP_AGENT_DB.BACKUP_TOOLS.RESTORE_DATABASE"
+        execution_environment:
+          type: "warehouse"
+          warehouse: "COMPUTE_WH"
+
+      suspend_backup_policy:
+        type: "procedure"
+        identifier: "BACKUP_AGENT_DB.BACKUP_TOOLS.SUSPEND_BACKUP_POLICY"
+        execution_environment:
+          type: "warehouse"
+          warehouse: "COMPUTE_WH"
+
+      resume_backup_policy:
+        type: "procedure"
+        identifier: "BACKUP_AGENT_DB.BACKUP_TOOLS.RESUME_BACKUP_POLICY"
+        execution_environment:
+          type: "warehouse"
+          warehouse: "COMPUTE_WH"
+
+      delete_backup:
+        type: "procedure"
+        identifier: "BACKUP_AGENT_DB.BACKUP_TOOLS.DELETE_BACKUP"
+        execution_environment:
+          type: "warehouse"
+          warehouse: "COMPUTE_WH"
+
+      drop_backup_set:
+        type: "procedure"
+        identifier: "BACKUP_AGENT_DB.BACKUP_TOOLS.DROP_BACKUP_SET"
+        execution_environment:
+          type: "warehouse"
+          warehouse: "COMPUTE_WH"
+
+      add_legal_hold:
+        type: "procedure"
+        identifier: "BACKUP_AGENT_DB.BACKUP_TOOLS.ADD_LEGAL_HOLD"
+        execution_environment:
+          type: "warehouse"
+          warehouse: "COMPUTE_WH"
+
+      remove_legal_hold:
+        type: "procedure"
+        identifier: "BACKUP_AGENT_DB.BACKUP_TOOLS.REMOVE_LEGAL_HOLD"
+        execution_environment:
+          type: "warehouse"
+          warehouse: "COMPUTE_WH"
+    $$;
+
+-- =====================================================
+-- STEP 4: GRANT PERMISSIONS
+-- =====================================================
+
+GRANT USAGE ON DATABASE BACKUP_AGENT_DB TO ROLE PUBLIC;
+GRANT USAGE ON SCHEMA BACKUP_AGENT_DB.BACKUP_TOOLS TO ROLE PUBLIC;
+GRANT USAGE ON AGENT BACKUP_AGENT_DB.BACKUP_TOOLS.BACKUP_ASSISTANT TO ROLE PUBLIC;
+
+-- =====================================================
+-- STEP 5: EXAMPLE BACKUP POLICIES
+-- =====================================================
+
+-- Hourly backups with 7-day retention (for critical tables)
+CREATE BACKUP POLICY IF NOT EXISTS BACKUP_AGENT_DB.BACKUP_TOOLS.HOURLY_7DAY_POLICY
+  SCHEDULE = '60 MINUTE'
+  EXPIRE_AFTER_DAYS = 7;
+
+-- Daily backups with 30-day retention (for databases)
+CREATE BACKUP POLICY IF NOT EXISTS BACKUP_AGENT_DB.BACKUP_TOOLS.DAILY_30DAY_POLICY
+  SCHEDULE = '1440 MINUTE'
+  EXPIRE_AFTER_DAYS = 30;
+
+-- Weekly backups with 14-day retention (for schemas)
+CREATE BACKUP POLICY IF NOT EXISTS BACKUP_AGENT_DB.BACKUP_TOOLS.WEEKLY_14DAY_POLICY
+  SCHEDULE = '10080 MINUTE'
+  EXPIRE_AFTER_DAYS = 14;
+
+-- =====================================================
+-- STEP 6: VERIFY INSTALLATION
+-- =====================================================
+
+SHOW AGENTS IN SCHEMA BACKUP_AGENT_DB.BACKUP_TOOLS;
+SHOW BACKUP POLICIES IN SCHEMA BACKUP_AGENT_DB.BACKUP_TOOLS;
+DESC AGENT BACKUP_AGENT_DB.BACKUP_TOOLS.BACKUP_ASSISTANT;
